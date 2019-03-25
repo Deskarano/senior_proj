@@ -1,0 +1,245 @@
+CONSTANT out_uart_data,   01
+CONSTANT out_mem_addr,    02
+CONSTANT out_mem_data,    03
+
+CONSTANT in_uart_data,   01
+CONSTANT in_uart_status, 02
+CONSTANT in_mem_data,    03
+
+CONSTANT tx_data_present, 00100000'b
+CONSTANT tx_buffer_half,  00010000'b
+CONSTANT tx_buffer_full,  00001000'b
+
+CONSTANT rx_data_present, 00000100'b
+CONSTANT rx_buffer_half,  00000010'b
+CONSTANT rx_buffer_full,  00000001'b
+
+; Register mapping
+; s0 - uart status
+; s1 - 1st value from uart
+; s2 - 2nd value from uart
+; sB - also misc characters, used for print_hex
+; sC - misc characters
+; sD - address counter (for dump_ram)
+; sE - memory command
+; sF - memory address
+
+init:
+	; initialize address
+	LOAD	sF, 00000000'b
+
+start:
+	; reset state
+	LOAD	s1, 00
+	LOAD	s2, 00
+	LOAD	sC, 00
+	LOAD	sD, 00
+	LOAD	sE, 00
+
+first:
+	; wait for data on the UART input
+	INPUT	s0, in_uart_status
+	AND	s0, rx_data_present
+	JUMP	Z, first
+	INPUT	s1, in_uart_data
+	OUTPUT	s1, out_uart_data
+
+second:
+	; data waiting, read it and wait for another one
+	INPUT	s0, in_uart_status
+	AND	s0, rx_data_present
+	JUMP	Z, second
+	INPUT	s2, in_uart_data
+	OUTPUT	s2, out_uart_data
+
+write:
+	; now have two data points
+	; first, write the address and data
+	OUTPUT	sF, out_mem_addr
+	OUTPUT	s1, out_mem_data
+
+	LOAD	sC, 00000000'b
+	OUTPUT	sC, out_mem_addr
+	OUTPUT	s2, out_mem_data
+
+	; increment the next memory address
+	ADD	sF, 01
+
+	; send something to the user
+	LOAD	sC, 21
+	OUTPUT	sC, out_uart_data
+
+	; dump ram and restart
+	CALL	dump_ram
+	JUMP	start
+
+dump_ram:
+	; initalize counter
+	LOAD	sD, 00
+	
+dump_ram_loop:
+	; print newline
+	LOAD	sC, 0A
+	OUTPUT	sC, out_uart_data
+	LOAD	sC, 0D
+	OUTPUT	sC, out_uart_data
+
+	; print the current address, "0x" first
+	LOAD	sC, 30
+	OUTPUT	sC, out_uart_data
+	LOAD	sC, 78
+	OUTPUT	sC, out_uart_data
+
+	; then the upper nibble first
+	LOAD	sC, sD
+	SR0	sC
+	SR0	sC
+	SR0	sC
+	SR0	sC
+	CALL	print_hex
+
+	; and then the lower nibble
+	LOAD	sC, sD
+	AND	sC, 00001111'b
+	CALL	print_hex
+
+	; then a colon and a space
+	LOAD	sC, 3A
+	OUTPUT	sC, out_uart_data
+	LOAD	sC, 20
+	OUTPUT	sC, out_uart_data
+	
+	; write the current address to memory interface
+	OUTPUT	sD, out_mem_addr
+	LOAD	sC, 00000000'b
+	OUTPUT	sC, out_mem_addr
+
+	; waste a cycle
+	ADD	sC, 00
+
+	; grab first character
+	INPUT	s1, in_mem_data
+	OUTPUT	s1, out_uart_data
+	
+	; grab second character
+	INPUT	s2, in_mem_data
+	OUTPUT	s2, out_uart_data
+
+	; wait for the output buffer to empty
+	CALL	empty_tx_buf
+
+	; increment read address and figure out if we need to go again
+	ADD	sD, 01
+	COMPARE	sD, sF
+	JUMP	C, dump_ram_loop
+
+	; print one more newline and return
+	LOAD	sC, 0A
+	OUTPUT	sC, out_uart_data
+	LOAD	sC, 0D
+	OUTPUT	sC, out_uart_data
+	RETURN
+
+empty_tx_buf:
+	INPUT	s0, in_uart_status
+	AND	s0, tx_data_present
+	JUMP	NZ, empty_tx_buf
+	RETURN
+
+print_hex:
+	COMPARE	sC, 00
+	JUMP	NZ, print_hex_1
+	LOAD	sB, 30
+	JUMP	print_hex_end
+
+print_hex_1:
+	COMPARE	sC, 01
+	JUMP	NZ, print_hex_2
+	LOAD	sB, 31
+	JUMP	print_hex_end
+
+print_hex_2:
+	COMPARE	sC, 02
+	JUMP	NZ, print_hex_3
+	LOAD	sB, 32
+	JUMP	print_hex_end
+
+print_hex_3:
+	COMPARE	sC, 03
+	JUMP	NZ, print_hex_4
+	LOAD	sB, 33
+	JUMP	print_hex_end
+
+print_hex_4:
+	COMPARE sC, 04
+	JUMP	NZ, print_hex_5
+	LOAD	sB, 34
+	JUMP	print_hex_end
+
+print_hex_5:
+	COMPARE	sC, 05
+	JUMP	NZ, print_hex_6
+	LOAD	sB, 35
+	JUMP	print_hex_end
+
+print_hex_6:
+	COMPARE	sC, 06
+	JUMP	NZ, print_hex_7
+	LOAD	sB, 36
+	JUMP	print_hex_end
+
+print_hex_7:
+	COMPARE	sC, 07
+	JUMP	NZ, print_hex_8
+	LOAD	sB, 37
+	JUMP	print_hex_end
+
+print_hex_8:
+	COMPARE	sC, 08
+	JUMP	NZ, print_hex_9
+	LOAD	sB, 38
+	JUMP	print_hex_end
+
+print_hex_9:
+	COMPARE	sC, 09
+	JUMP	NZ, print_hex_A
+	LOAD	sB, 39
+	JUMP	print_hex_end
+
+print_hex_A:
+	COMPARE sC, 0A
+	JUMP	NZ, print_hex_B
+	LOAD	sB, 41
+	JUMP	print_hex_end
+
+print_hex_B:
+	COMPARE	sC, 0B
+	JUMP	NZ, print_hex_C
+	LOAD	sB, 42
+	JUMP	print_hex_end
+
+print_hex_C:
+	COMPARE	sC, 0C
+	JUMP	NZ, print_hex_D
+	LOAD	sB, 43
+	JUMP	print_hex_end
+
+print_hex_D:
+	COMPARE	sC, 0D
+	JUMP	NZ, print_hex_E
+	LOAD	sB, 44
+	JUMP	print_hex_end
+
+print_hex_E:
+	COMPARE	sC, 0E
+	JUMP	NZ, print_hex_F
+	LOAD	sB, 45
+	JUMP	print_hex_end
+
+print_hex_F:
+	LOAD	sB, 46
+
+print_hex_end:
+	OUTPUT	sB, out_uart_data
+	RETURN
+	

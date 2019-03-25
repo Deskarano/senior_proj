@@ -1,0 +1,67 @@
+CONSTANT out_uart_data,   00000001'b
+CONSTANT out_mem_addr,    00000010'b
+CONSTANT out_mem_data_p0, 00000011'b
+CONSTANT out_mem_data_p1, 00001011'b
+CONSTANT out_leds,	  00000100'b
+
+CONSTANT in_uart_data,   01
+CONSTANT in_uart_status, 02
+CONSTANT in_mem_data,    03
+
+CONSTANT tx_data_present, 00100000'b
+CONSTANT tx_buffer_half,  00010000'b
+CONSTANT tx_buffer_full,  00001000'b
+
+CONSTANT rx_data_present, 00000100'b
+CONSTANT rx_buffer_half,  00000010'b
+CONSTANT rx_buffer_full,  00000001'b
+
+; Register mapping
+; s0 - stack pointer (points to next empty)
+; s1 - stack reg
+; s2 - uart reg
+; s3 - mem reg 1
+; s4 - mem reg 2
+; s5 - mem reg 3 (parity)
+; s6 - leds
+; s7, s8, s9 - led counters
+; others - misc
+
+init:
+	ENABLE	INTERRUPT
+
+main:
+	OUTPUTK	00, out_leds
+	CALL	wait
+
+	OUTPUTK	0F, out_leds
+	CALL	wait
+
+	JUMP	main
+
+wait:
+	LOAD	s7, 00
+	LOAD	s8, 00
+	LOAD	s9, 00
+
+wait_loop_1:
+	ADD	s7, 01
+	COMPARE	s7, FF
+	JUMP	NZ, wait_loop_1
+	LOAD	s7, 00
+	ADD	s8, 01
+
+wait_loop_2:
+	COMPARE	s8, FF
+	JUMP	NZ, wait_loop_1
+	LOAD	s7, 00
+	LOAD	s8, 00
+	ADD	s9, 01
+
+wait_loop_3:
+	COMPARE	s9, FF
+	JUMP	NZ, wait_loop_1
+	LOAD	s7, 00
+	LOAD	s8, 00
+	LOAD	s9, 00
+	RETURN

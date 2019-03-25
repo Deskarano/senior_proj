@@ -1,0 +1,57 @@
+; LEDs
+CONSTANT led_port, 01
+
+CONSTANT led_1, 00000001'b
+CONSTANT led_2, 00000010'b
+CONSTANT led_3, 00000100'b
+CONSTANT led_4, 00001000'b
+
+start:
+	LOAD	s0, led_1
+	LOAD	s1, led_2
+	LOAD 	s2, led_3
+	LOAD 	s3, led_4
+
+	LOAD 	sF, 00
+
+led_loop:
+	XOR	sF, s0
+	OUTPUT	sF, led_port
+	CALL	delay
+
+	XOR	sF, s1
+	OUTPUT	sF, led_port
+	CALL	delay
+
+	XOR	sF, s2
+	OUTPUT	sF, led_port
+	CALL	delay
+
+	XOR	sF, s3
+	OUTPUT	sF, led_port
+	CALL	delay
+
+	JUMP	led_loop
+
+delay_init:
+	LOAD	sE, 00
+	LOAD	sD, 00
+	LOAD	sC, 00
+	RETURN
+
+delay_main:
+	AND	sE, sE			; reset carry flag
+	ADD	sE, 01
+	JUMP 	NC, delay_main
+	AND	sE, sE			; reset carry flag
+	ADD	sD, 01
+	JUMP	NC, delay_main
+	AND	sE, sE			; reset carry flag
+	ADD	sC, 01
+	JUMP	NC, delay_main
+	RETURN
+
+delay:
+	CALL	delay_init
+	CALL	delay_main
+	RETURN

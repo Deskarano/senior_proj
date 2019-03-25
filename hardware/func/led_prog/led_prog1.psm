@@ -1,0 +1,179 @@
+CONSTANT out_uart_data,   00000001'b
+CONSTANT out_mem_addr,    00000010'b
+CONSTANT out_mem_data_p0, 00000011'b
+CONSTANT out_mem_data_p1, 00001011'b
+CONSTANT out_leds,	  00000100'b
+
+CONSTANT in_uart_data,   01
+CONSTANT in_uart_status, 02
+CONSTANT in_mem_data,    03
+
+CONSTANT tx_data_present, 00100000'b
+CONSTANT tx_buffer_half,  00010000'b
+CONSTANT tx_buffer_full,  00001000'b
+
+CONSTANT rx_data_present, 00000100'b
+CONSTANT rx_buffer_half,  00000010'b
+CONSTANT rx_buffer_full,  00000001'b
+
+; Register mapping
+; s0 - stack pointer (points to next empty)
+; s1 - stack reg
+; s2 - uart reg
+; s3 - mem reg 1
+; s4 - mem reg 2
+; s5 - mem reg 3 (parity)
+; s6 - leds
+; s7, s8, s9 - led counters
+; others - misc
+
+init:
+	LOAD	s0, 00
+	LOAD	s1, 00
+	LOAD	s2, 00
+	LOAD	s3, 00
+	LOAD	s4, 00
+	LOAD	s5, 00
+	LOAD	s6, 00
+	ENABLE	INTERRUPT
+
+main:
+	OUTPUT	s6, out_leds
+	CALL	wait
+
+	ADD	s6, 01
+	COMPARE	s6, 00010000'b
+	JUMP	NZ, main
+	LOAD	s6, 00
+	JUMP	main
+
+wait:
+	LOAD	s7, 00
+	LOAD	s8, 00
+	LOAD	s9, 00
+
+wait_loop_1:
+	ADD	s7, 01
+	COMPARE	s7, FF
+	JUMP	NZ, wait_loop_1
+	LOAD	s7, 00
+	ADD	s8, 01
+
+wait_loop_2:
+	COMPARE	s8, FF
+	JUMP	NZ, wait_loop_1
+	LOAD	s7, 00
+	LOAD	s8, 00
+	ADD	s9, 01
+
+wait_loop_3:
+	COMPARE	s9, FF
+	JUMP	NZ, wait_loop_1
+	LOAD	s7, 00
+	LOAD	s8, 00
+	LOAD	s9, 00
+	RETURN
+
+; interrupt register mapping
+; s0 - UART data in
+; s9 - data 0
+; sA - data 1
+; sB - parity
+; sC - address counter 0
+; sD - address counter 1
+; sE - target address 0
+; sF - target address 1
+ADDRESS	7BF
+reprog:
+	OUTPUTK	0F, out_leds
+	REGBANK	B
+
+reprog_addr_1:
+	INPUT	sE, in_uart_status
+	AND	sE, rx_data_present
+	JUMP	Z, reprog_addr_1
+	INPUT	sE, in_uart_data
+
+reprog_addr_2:
+	INPUT	sF, in_uart_status
+	AND	sF, rx_data_present
+	JUMP	Z, reprog_addr_2
+	INPUT	sF, in_uart_data
+
+	STRING	addr_str$, "addr"
+	OUTPUTK	addr_str$, out_uart_data
+
+	LOAD	sC, 00
+	LOAD	sD, 00
+
+reprog_data_1:
+	; wait for 3 data bytes: [data] [data] [parity]
+	INPUT	s9, in_uart_status
+	AND	s9, rx_data_present
+	JUMP	Z, reprog_data_1
+	INPUT	s9, in_uart_data
+
+reprog_data_2:
+	INPUT	sA, in_uart_status
+	AND	sA, rx_data_present
+	JUMP	Z, reprog_data_2
+	INPUT	sA, in_uart_data
+
+reprog_data_3:
+	INPUT	sB, in_uart_status
+	AND	sB, rx_data_present
+	JUMP	Z, reprog_data_3
+	INPUT	sB, in_uart_data
+
+	STRING	data_str$, "data"
+	OUTPUTK	data_str$, out_uart_data
+
+reprog_write:
+	; output byte depending on parity
+	TEST	sB, 00000001'b
+	JUMP	NZ, reprog_write_d1_p1
+	OUTPUT	s9, out_mem_data_p0
+	JUMP	reprog_write_d2
+
+reprog_write_d1_p1:
+	OUTPUT	s9, out_mem_data_p1
+
+reprog_write_d2:
+	TEST	sB, 00000010'b
+	JUMP	NZ, reprog_write_d2_p1
+	OUTPUT	sA, out_mem_data_p0
+	JUMP	reprog_write_addr
+
+reprog_write_d2_p1:
+	OUTPUT	sA, out_mem_data_p1
+
+reprog_write_addr:
+	; write those as well
+	OUTPUT	sC, out_mem_addr
+	OUTPUT	sD, out_mem_addr
+
+	STRING	done_str$, "done"
+	OUTPUTK	done_str$, out_uart_data
+
+	; increment and check addresses
+	ADD	sC, 01
+	COMPARE	sC, 00 ; only happens if overflow occured, in which case need to increment other counter
+	JUMP	NZ, reprog_loop_check
+	ADD	sD, 01
+
+reprog_uart_wait:
+	INPUT	s0, in_uart_status
+	AND	s0, tx_data_present	
+	JUMP	NZ, reprog_uart_wait
+	
+reprog_loop_check:
+	COMPARE	sD, sF
+	JUMP	NZ, reprog_data_1
+	COMPARE	sC, sE
+	JUMP	NZ, reprog_data_1
+
+	STRING	reset_str$, "rest"
+	OUTPUTK	reset_str$, out_uart_data
+
+	OUTPUTK	00, out_leds
+	RETURNI	ENABLE

@@ -1,0 +1,338 @@
+CONSTANT out_uart_data,   00000001'b
+CONSTANT out_mem_addr,    00000010'b
+CONSTANT out_mem_data_p0, 00000011'b
+CONSTANT out_mem_data_p1, 00001011'b
+
+CONSTANT in_uart_data,   01
+CONSTANT in_uart_status, 02
+CONSTANT in_mem_data,    03
+
+CONSTANT tx_data_present, 00100000'b
+CONSTANT tx_buffer_half,  00010000'b
+CONSTANT tx_buffer_full,  00001000'b
+
+CONSTANT rx_data_present, 00000100'b
+CONSTANT rx_buffer_half,  00000010'b
+CONSTANT rx_buffer_full,  00000001'b
+
+; Register mapping
+; s0 - stack pointer (points to next empty)
+; s1 - stack reg
+; s2 - uart reg
+; s3 - mem reg 1
+; s4 - mem reg 2
+; s5 - mem reg 3 (parity)
+; s6 -> sD - miscellaneous
+; sE - memory iterator (for dump_ram)
+; sF - write address
+
+init:
+	LOAD	s0, 00
+	LOAD	s1, 00
+	LOAD	s2, 00
+	LOAD	s3, 00
+	LOAD	s4, 00
+	LOAD	s5, 00
+	LOAD	s6, 00
+
+	LOAD	sE, 00
+	LOAD	sF, 00
+
+main:
+	; first push the two address bytes to the stack
+	LOAD	s1, sF
+	CALL	stack_push
+	LOAD	s1, 00
+	CALL	stack_push
+
+	; wait for 3 bytes from uart
+	CALL	uart_recv
+	CALL	uart_send
+	LOAD	s2, 20
+	CALL	uart_send
+	CALL	print_binary_byte
+	LOAD	s2, 20
+	CALL	uart_send
+	CALL	uart_empty_tx_buf
+
+	CALL	uart_recv
+	CALL	uart_send
+	LOAD	s2, 20
+	CALL	uart_send
+	CALL	print_binary_byte
+	LOAD	s2, 20
+	CALL	uart_send
+	CALL	uart_empty_tx_buf
+
+	CALL	uart_recv
+	CALL	uart_send
+	LOAD	s2, 20
+	CALL	uart_send
+	CALL	print_binary_byte
+	LOAD	s2, 20
+	CALL	uart_send
+	CALL	uart_empty_tx_buf
+
+	; write to memory and notify user that write happened
+	CALL	write_to_mem
+	LOAD	s2, 21
+	CALL	uart_send
+
+	; increment memory addr and dump out the RAM
+	ADD	sF, 01
+	CALL	dump_ram
+	JUMP	main
+	
+dump_ram:
+	LOAD	sE, 00
+
+dump_ram_loop:
+	CALL	print_nl
+	
+	; print out the hex address
+	LOAD	s1, sE
+	CALL	stack_push
+	CALL	print_hex_byte
+
+	; print a colon and a spacce
+	LOAD	s2, 3A
+	CALL	uart_send
+	LOAD	s2, 20
+	CALL	uart_send
+	CALL	uart_empty_tx_buf
+
+	; load another address byte and read
+	LOAD	s1, 00
+	CALL	stack_push
+	CALL	read_from_mem
+
+	; pop results from stack and send them (ignore parity for now)
+	CALL	print_binary_byte
+	CALL	stack_pop
+	LOAD	s5, s1
+	LOAD	s2, 20
+	CALL	uart_send
+	CALL	uart_empty_tx_buf
+
+	CALL	print_binary_byte
+	CALL	stack_pop
+	LOAD	s4, s1
+	LOAD	s2, 20
+	CALL	uart_send
+	CALL	uart_empty_tx_buf
+
+	CALL	print_binary_byte
+	CALL	stack_pop
+	LOAD	s3, s1
+	LOAD	s2, 20
+	CALL	uart_send
+	CALL	uart_empty_tx_buf
+
+	; output a space
+	LOAD	s2, 20
+	CALL	uart_send
+
+	OUTPUT	s4, out_uart_data
+	OUTPUT	s3, out_uart_data
+
+	; empty the buffer
+	CALL	uart_empty_tx_buf
+
+	; increment read address and loop
+	ADD	sE, 01
+	COMPARE	sE, sF
+	JUMP	C, dump_ram_loop
+
+	CALL	print_nl
+	RETURN
+	
+read_from_mem:
+	; stack needs to look like this and returns this
+	;
+	;                                       [parity]
+	;	[addr 1]			[data 1]
+	;_______[addr 0]______		  ______[data 0]______
+	
+	; pop off the addr bytes
+	CALL	stack_pop
+	LOAD	s4, s1
+	CALL	stack_pop
+	LOAD	s3, s1
+
+	; write them to interface
+	OUTPUT	s3, out_mem_addr
+	OUTPUT	s4, out_mem_addr
+
+	; waste a cycle for the read to r
+	ADD	s3, 00
+
+	INPUT	s1, in_mem_data
+	CALL	stack_push
+	INPUT	s1, in_mem_data
+	CALL	stack_push
+	INPUT	s1, in_mem_data
+	CALL	stack_push
+	RETURN
+
+write_to_mem:
+	; stack needs to look like this
+	;
+	;	[parity]
+	; 	[data 1]
+	; 	[data 0]
+	; 	[addr 1]
+	; ______[addr 0]_______
+
+	; first pop off the data bytes
+	CALL	stack_pop
+	LOAD	s5, s1
+	CALL	stack_pop
+	LOAD	s4, s1
+	CALL	stack_pop
+	LOAD	s3, s1
+
+	; output byte depending on parity
+	TEST	s5, 00000001'b
+	JUMP	NZ, write_to_mem_d1_p1
+	OUTPUT	s3, out_mem_data_p0
+	JUMP	write_to_mem_d2
+
+write_to_mem_d1_p1:
+	OUTPUT	s3, out_mem_data_p1
+
+write_to_mem_d2:
+	TEST	s5, 00000010'b
+	JUMP	NZ, write_to_mem_d2_p1
+	OUTPUT	s4, out_mem_data_p0
+	JUMP	write_to_mem_addr
+
+write_to_mem_d2_p1:
+	OUTPUT	s4, out_mem_data_p1
+
+write_to_mem_addr:
+	; then pop off the addr bytes
+	CALL	stack_pop
+	LOAD	s4, s1
+	CALL	stack_pop
+	LOAD	s3, s1
+
+	; write those as well
+	OUTPUT	s3, out_mem_addr
+	OUTPUT	s4, out_mem_addr
+	RETURN
+
+uart_recv:
+	; wait for a byte to be present
+	INPUT	s2, in_uart_status
+	AND	s2, rx_data_present
+	JUMP	Z, uart_recv
+
+	; retrieve the byte and push it to the stack
+	INPUT	s2, in_uart_data
+	LOAD	s1, s2
+	CALL	stack_push
+	RETURN
+
+uart_send:
+	OUTPUT	s2, out_uart_data
+	RETURN
+
+uart_empty_tx_buf:
+	INPUT	s2, in_uart_status
+	AND	s2, tx_data_present
+	JUMP	NZ, uart_empty_tx_buf
+	RETURN
+
+stack_pop:
+	SUB	s0, 01
+	FETCH	s1, (s0)
+	RETURN
+
+stack_push:
+	STORE	s1, (s0)
+	ADD	s0, 01
+	RETURN
+
+stack_peek:
+	SUB	s0, 01
+	FETCH	s1, (s0)
+	ADD	s0, 01
+	RETURN
+
+print_nl:
+	OUTPUTK	0A, out_uart_data
+	OUTPUTK	0D, out_uart_data
+	RETURN
+
+print_binary_byte:
+	; stack is like this
+	; 
+	; _____[byte ]______
+
+	; first write the 0b prefix
+	STRING	bin_prefix$, "0b"
+	OUTPUTK	bin_prefix$, out_uart_data
+
+	; set up the print
+	LOAD	s6, 00
+	CALL	stack_peek
+
+print_binary_loop:
+	COMPARE	s6, 08
+	RETURN	NC
+	TEST	s1, 10000000'b
+	JUMP	NZ, print_binary_1
+	OUTPUTK	30, out_uart_data
+	JUMP	print_binary_loop_end
+	
+print_binary_1:
+	OUTPUTK	31, out_uart_data
+
+print_binary_loop_end:
+	ADD	s6, 01
+	RL	s1
+	JUMP	print_binary_loop
+
+print_hex_byte:
+	; stack is like this
+	;
+	; ______[byte]______
+
+	; first write the 0x prefix
+	STRING	hex_prefix$, "0x"
+	OUTPUTK	hex_prefix$, out_uart_data
+
+	; peek the byte from the stack, get the upper nibble, and push it
+	CALL	stack_peek
+	SR0	s1
+	SR0	s1
+	SR0	s1
+	SR0	s1
+	CALL	stack_push
+	CALL	print_hex_nibble
+
+	; lower nibble
+	CALL	stack_peek
+	AND	s1, 00001111'b
+	CALL	stack_push
+	CALL	print_hex_nibble
+
+	RETURN
+
+print_hex_nibble:
+	; stack is like this
+	;
+	; _____[XXXXnibble]____
+
+	CALL	stack_pop
+	LOAD	s2, s1
+	COMPARE	s2, 0A
+	JUMP	C, print_hex_nibble_end
+	ADD	s2, 07
+
+print_hex_nibble_end:
+	ADD	s2, 30
+	CALL	uart_send
+	RETURN
+
+	
